@@ -1,7 +1,57 @@
-assets/*
+.data/*
+!.data/.gitkeep
+
 docs/*
+skills/*
+
 .env
 .env.*
 !.env.example
 !.env.development
 !.env.production
+
+volumes/*
+!volumes/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+.venv/
+venv/
+env/
+ENV/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Logs / runtime
+*.log
+*.pid
+*.out
+*.err
+
+# IDE / editor
+.idea/
+.vscode/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini

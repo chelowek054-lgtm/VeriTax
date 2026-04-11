@@ -1,0 +1,49 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: veritax-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - ./volumes/qdrant:/qdrant/storage
+
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: veritax-fastapi
+    restart: unless-stopped
+    depends_on:
+      - qdrant
+    env_file:
+      - .env
+    # FASTAPI_PORT в .env — порт на хосте для браузера; внутри контейнера uvicorn слушает 8000.
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      FASTAPI_HOST: 0.0.0.0
+      FASTAPI_PORT: ${FASTAPI_PORT:-80}
+      DATA_DIR: /app/.data
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_URL: http://qdrant:6333
+      # Ollama всегда на хосте; из контейнера — host.docker.internal (Docker Desktop Win/Mac).
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-veritax_threads}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
+      EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-16}
+      EMBED_MAX_CONCURRENT: ${EMBED_MAX_CONCURRENT:-4}
+      THREAD_TEXT_MAX_CHARS: ${THREAD_TEXT_MAX_CHARS:-12000}
+    ports:
+      - "${FASTAPI_PORT:-80}:8000"
+    volumes:
+      - .:/app
+    # Том `.:/app` подменяет код, но не site-packages образа — ставим зависимости из актуального requirements.txt при старте.
+    command: sh -c "pip install --no-cache-dir -q -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s

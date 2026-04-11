@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VeriTax — чаты и индексация</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">К основному содержимому</a>
+  <header class="site-header">
+    <div class="wrap">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <div class="brand-title">VeriTax</div>
+          <div class="brand-sub">Поиск по экспорту Telegram</div>
+        </div>
+      </div>
+      <nav class="header-nav" aria-label="Служебные ссылки">
+        <a class="nav-link" href="/docs">API (Swagger)</a>
+        <a class="nav-link" href="/health">Проверка</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main" class="wrap main">
+    {% if flash_message %}
+    <div class="flash flash-{{ flash_kind or 'info' }}" role="status">
+      {{ flash_message }}
+    </div>
+    {% endif %}
+
+    <section class="card" aria-labelledby="step1-title">
+      <h2 id="step1-title" class="card-title">1. Положите чаты в папку данных</h2>
+      <p class="card-text">
+        Скопируйте папку экспорта Telegram (внутри должен быть файл <code>result.json</code>)
+        в каталог:
+      </p>
+      <p class="path-pill"><code>{{ data_dir }}</code></p>
+      <p class="card-text muted">
+        Каждая отдельная папка под этим каталогом — отдельный чат или раздел. Не смешивайте разные выгрузки в одной папке.
+      </p>
+    </section>
+
+    <section class="card" aria-labelledby="step2-title">
+      <h2 id="step2-title" class="card-title">2. Найденные выгрузки</h2>
+      {% if chats %}
+      <ul class="chat-list">
+        {% for c in chats %}
+        <li class="chat-item">
+          <div class="chat-main">
+            <span class="chat-ns">{{ c.source_namespace or "(корень)" }}</span>
+            <span class="chat-path"><code>{{ c.relative_result_path }}</code></span>
+          </div>
+          <div class="chat-meta-block">
+            <span class="status-badge status-{{ c.indexed_status }}">{{ c.indexed_status_label }}</span>
+            {% if c.threads_indexed is not none and c.threads_total is not none %}
+            <span class="chat-meta">веток: {{ c.threads_indexed }} / {{ c.threads_total }}</span>
+            {% endif %}
+            {% if c.last_indexed_at %}
+            <span class="chat-meta">последняя индексация: {{ c.last_indexed_at }}</span>
+            {% endif %}
+            {% if c.last_error %}
+            <span class="chat-meta chat-meta-error">{{ c.last_error }}</span>
+            {% endif %}
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="card-text muted">Пока нет ни одного <code>result.json</code> в папке данных. Добавьте экспорт и обновите страницу.</p>
+      {% endif %}
+    </section>
+
+    <section class="card" aria-labelledby="step3-title">
+      <h2 id="step3-title" class="card-title">3. Проиндексировать</h2>
+      <p class="card-text">
+        Нужны запущенные на компьютере <strong>Ollama</strong> (эмбеддинги и чат, не в Docker) и доступный <strong>Qdrant</strong> (часто в Docker вместе с приложением).
+        Индексация выполняется в фоне; ниже отображается прогресс.
+      </p>
+      <div class="stack">
+        <button type="button" class="btn btn-primary" id="btn-start-index">Запустить индексацию</button>
+        <p class="muted-note" id="index-hint" aria-live="polite"></p>
+        <div class="progress-wrap" id="index-progress-wrap" hidden>
+          <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="index-progress-bar">
+            <div class="progress-bar-fill" id="index-progress-fill"></div>
+          </div>
+          <div class="job-summary" id="index-status" aria-live="polite"></div>
+          <div class="job-errors" id="index-errors" hidden>
+            <div class="job-section-title">Ошибки</div>
+            <ul class="job-errors-list" id="index-errors-list"></ul>
+          </div>
+          <div class="job-results" id="index-results" hidden>
+            <div class="job-section-title">Результат индексации</div>
+            <ul class="job-results-list" id="index-results-list"></ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="step4-title">
+      <h2 id="step4-title" class="card-title">4. Вопрос к чату</h2>
+      <p class="card-text muted">
+        Ответ формируется локальной моделью в Ollama только по найденным в индексе веткам обсуждения. Ниже — источники с текстом ветки.
+      </p>
+      <form class="stack form-grid" id="ask-form">
+        <div class="field">
+          <label for="chat_namespace">Папка (namespace)</label>
+          <select id="chat_namespace" name="chat_namespace" {% if not chats %}disabled{% endif %}>
+            <option value="">Все чаты</option>
+            {% for c in chats %}
+            <option value="{{ c.source_namespace }}">{{ c.source_namespace or "(корень)" }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="question">Ваш вопрос</label>
+          <textarea id="question" name="question" rows="4" required placeholder="Например: о чём спорили про видеокарты в январе 2026?"></textarea>
+        </div>
+        <button type="submit" class="btn btn-secondary" id="btn-ask">Получить ответ</button>
+      </form>
+      <p class="muted-note" id="ask-status" aria-live="polite"></p>
+      <div id="answer-panel" class="panel" hidden></div>
+      <h3 class="card-title" style="margin-top:1.25rem;font-size:1rem;" id="sources-heading" hidden>Источники</h3>
+      <ul class="sources-list" id="sources-list" hidden></ul>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <span>VeriTax</span>
+      <span class="muted">Локальный режим. Данные не уходят в облако, кроме ваших настроек Ollama/Qdrant.</span>
+    </div>
+  </footer>
+
+  <script>
+(function () {
+  const btnIndex = document.getElementById("btn-start-index");
+  const indexHint = document.getElementById("index-hint");
+  const progressWrap = document.getElementById("index-progress-wrap");
+  const progressFill = document.getElementById("index-progress-fill");
+  const progressBar = document.getElementById("index-progress-bar");
+  const indexStatus = document.getElementById("index-status");
+  const indexErrors = document.getElementById("index-errors");
+  const indexErrorsList = document.getElementById("index-errors-list");
+  const indexResults = document.getElementById("index-results");
+  const indexResultsList = document.getElementById("index-results-list");
+  let pollTimer = null;
+
+  function setProgress(pct) {
+    const v = Math.max(0, Math.min(100, pct));
+    progressFill.style.width = v + "%";
+    progressBar.setAttribute("aria-valuenow", String(Math.round(v)));
+  }
+
+  function phaseLabel(phase) {
+    const labels = {
+      starting: "запуск",
+      running: "подготовка",
+      loading_export: "чтение экспорта",
+      building_threads: "сборка веток",
+      embedding: "получение эмбеддингов",
+      upserting: "запись в индекс",
+      processing: "завершение экспорта",
+      done: "готово",
+      error: "ошибка",
+      empty: "нет данных",
+    };
+    return labels[phase] || phase;
+  }
+
+  function statusLabel(status) {
+    const labels = {
+      pending: "в очереди",
+      running: "в работе",
+      completed: "завершено",
+      failed: "с ошибкой",
+    };
+    return labels[status] || status;
+  }
+
+  function splitJobError(err) {
+    const raw = String(err || "");
+    const idx = raw.indexOf(": ");
+    if (idx > 0) {
+      return { title: raw.slice(0, idx), detail: raw.slice(idx + 2) };
+    }
+    return { title: "Ошибка", detail: raw };
+  }
+
+  function renderJobErrors(data) {
+    const errors = Array.isArray(data.errors) ? data.errors : [];
+    indexErrorsList.innerHTML = "";
+    if (!errors.length && !(data.status === "failed" && data.fatal_error)) {
+      indexErrors.hidden = true;
+      return;
+    }
+
+    errors.forEach(function (err) {
+      const item = splitJobError(err);
+      const li = document.createElement("li");
+      li.className = "job-error-item";
+      li.innerHTML = "<div class='job-error-title'>" + escapeHtml(item.title) + "</div>" +
+        "<div class='job-error-detail'>" + escapeHtml(item.detail) + "</div>";
+      indexErrorsList.appendChild(li);
+    });
+
+    if (data.status === "failed" && data.fatal_error) {
+      const li = document.createElement("li");
+      li.className = "job-error-item";
+      li.innerHTML = "<div class='job-error-title'>Фатальная ошибка</div>" +
+        "<div class='job-error-detail'>" + escapeHtml(data.fatal_error) + "</div>";
+      indexErrorsList.appendChild(li);
+    }
+
+    indexErrors.hidden = false;
+  }
+
+  function renderJobResults(data) {
+    indexResultsList.innerHTML = "";
+    if (!data.result || !Array.isArray(data.result.exports) || !data.result.exports.length) {
+      indexResults.hidden = true;
+      return;
+    }
+
+    data.result.exports.forEach(function (exp) {
+      const li = document.createElement("li");
+      li.className = "job-result-item";
+      li.innerHTML =
+        "<div class='job-result-head'>" +
+          "<span class='job-result-path'><code>" + escapeHtml(exp.path || "") + "</code></span>" +
+          "<span class='job-result-badge'>" + escapeHtml((exp.source_namespace || "").trim() || "(корень)") + "</span>" +
+        "</div>" +
+        "<div class='job-result-meta'>" +
+          "сообщений: <strong>" + escapeHtml(exp.messages_loaded || 0) + "</strong> · " +
+          "веток: <strong>" + escapeHtml(exp.threads_indexed || 0) + " / " + escapeHtml(exp.threads_total || 0) + "</strong>" +
+        "</div>";
+      indexResultsList.appendChild(li);
+    });
+
+    indexResults.hidden = false;
+  }
+
+  function renderIndexState(data) {
+    const total = data.exports_total || 0;
+    const done = data.exports_done || 0;
+    const currentTotal = data.current_export_threads_total || 0;
+    const currentDone = data.current_export_threads_done || 0;
+    const currentFraction = currentTotal > 0 ? (currentDone / currentTotal) : 0;
+    const pct = total > 0
+      ? Math.round((100 * (done + currentFraction)) / total)
+      : (data.status === "completed" ? 100 : 0);
+    setProgress(pct);
+    const parts = [];
+    parts.push(
+      "<div class='job-summary-row'>" +
+      "<span class='job-pill'>" + escapeHtml(statusLabel(data.status)) + "</span>" +
+      "<span class='job-summary-text'>Фаза: <strong>" + escapeHtml(phaseLabel(data.phase)) + "</strong></span>" +
+      "<span class='job-summary-text'>Прогресс: <strong>" + escapeHtml(pct) + "%</strong></span>" +
+      "</div>"
+    );
+    if (data.current_export_relative_path) {
+      parts.push("<div class='job-summary-text'>Файл: <code>" + escapeHtml(data.current_export_relative_path) + "</code></div>");
+    }
+    if (data.current_source_namespace) {
+      parts.push("<div class='job-summary-text'>Папка: <strong>" + escapeHtml(data.current_source_namespace) + "</strong></div>");
+    }
+    if (currentTotal > 0) {
+      parts.push("<div class='job-summary-text'>Текущий экспорт: <strong>" + escapeHtml(currentDone) + " / " + escapeHtml(currentTotal) + "</strong> веток</div>");
+    }
+    parts.push(
+      "<div class='job-summary-grid'>" +
+        "<div class='job-stat'><span class='job-stat-label'>Экспортов</span><strong>" + escapeHtml(done) + " / " + escapeHtml(total) + "</strong></div>" +
+        "<div class='job-stat'><span class='job-stat-label'>Веток в индексе</span><strong>" + escapeHtml(data.threads_indexed || 0) + "</strong></div>" +
+        "<div class='job-stat'><span class='job-stat-label'>Ошибок</span><strong>" + escapeHtml((data.errors || []).length + ((data.status === "failed" && data.fatal_error) ? 1 : 0)) + "</strong></div>" +
+      "</div>"
+    );
+    indexStatus.innerHTML = parts.join("");
+    renderJobErrors(data);
+    renderJobResults(data);
+    if (data.status === "completed" && data.result) {
+      const r = data.result;
+      indexHint.textContent = "Готово: экспортов " + r.exports_processed + ", веток " + r.threads_indexed + ".";
+    } else if (data.status === "running") {
+      if (currentTotal > 0) {
+        indexHint.textContent = "Идёт " + phaseLabel(data.phase) + ": " + currentDone + " / " + currentTotal + " веток текущего экспорта.";
+      } else {
+        indexHint.textContent = "Идёт " + phaseLabel(data.phase) + ".";
+      }
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  async function pollJob(jobId) {
+    const res = await fetch("/api/v1/index/jobs/" + encodeURIComponent(jobId));
+    if (!res.ok) return;
+    const data = await res.json();
+    renderIndexState(data);
+    if (data.status === "completed" || data.status === "failed") {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      btnIndex.disabled = false;
+    }
+  }
+
+  btnIndex.addEventListener("click", async function () {
+    btnIndex.disabled = true;
+    indexHint.textContent = "Запуск задачи…";
+    progressWrap.hidden = false;
+    setProgress(0);
+    indexStatus.textContent = "";
+    indexErrors.hidden = true;
+    indexResults.hidden = true;
+    indexErrorsList.innerHTML = "";
+    indexResultsList.innerHTML = "";
+    try {
+      const res = await fetch("/api/v1/index/jobs", { method: "POST" });
+      if (!res.ok) {
+        indexHint.textContent = "Не удалось создать задачу (HTTP " + res.status + ").";
+        btnIndex.disabled = false;
+        return;
+      }
+      const data = await res.json();
+      const jobId = data.job_id;
+      indexHint.textContent = "Задача " + jobId + ". Обновление статуса…";
+      await pollJob(jobId);
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(function () { pollJob(jobId); }, 800);
+    } catch (e) {
+      indexHint.textContent = "Ошибка сети при запуске индексации.";
+      btnIndex.disabled = false;
+    }
+  });
+
+  const askForm = document.getElementById("ask-form");
+  const askStatus = document.getElementById("ask-status");
+  const answerPanel = document.getElementById("answer-panel");
+  const sourcesHeading = document.getElementById("sources-heading");
+  const sourcesList = document.getElementById("sources-list");
+  const btnAsk = document.getElementById("btn-ask");
+
+  askForm.addEventListener("submit", async function (ev) {
+    ev.preventDefault();
+    const q = document.getElementById("question").value.trim();
+    const ns = document.getElementById("chat_namespace").value;
+    if (!q) {
+      askStatus.textContent = "Введите вопрос.";
+      return;
+    }
+    btnAsk.disabled = true;
+    askStatus.textContent = "Запрос к модели…";
+    answerPanel.hidden = false;
+    answerPanel.className = "panel panel-loading";
+    answerPanel.textContent = "Ожидание ответа…";
+    sourcesHeading.hidden = true;
+    sourcesList.hidden = true;
+    sourcesList.innerHTML = "";
+
+    try {
+      const res = await fetch("/api/v1/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q, source_namespace: ns || null }),
+      });
+      const data = await res.json().catch(function () { return null; });
+      if (!res.ok) {
+        answerPanel.className = "panel panel-error";
+        let errMsg = "Ошибка HTTP " + res.status;
+        if (data && data.detail) {
+          errMsg = Array.isArray(data.detail)
+            ? data.detail.map(function (d) { return d.msg || JSON.stringify(d); }).join("; ")
+            : String(data.detail);
+        }
+        answerPanel.textContent = errMsg;
+        askStatus.textContent = "";
+        btnAsk.disabled = false;
+        return;
+      }
+      answerPanel.className = "panel";
+      answerPanel.textContent = data.answer || "";
+      askStatus.textContent = "";
+      if (data.sources && data.sources.length) {
+        sourcesHeading.hidden = false;
+        sourcesList.hidden = false;
+        data.sources.forEach(function (s, idx) {
+          const li = document.createElement("li");
+          const det = document.createElement("details");
+          det.className = "source-item";
+          const sum = document.createElement("summary");
+          const title = (s.source_chat || "Чат") + " · score " + (typeof s.score === "number" ? s.score.toFixed(4) : s.score);
+          sum.innerHTML = "<span>" + escapeHtml(title) + "</span><span class='source-meta'>" +
+            escapeHtml(s.source_namespace || "") + " · " + escapeHtml(s.date_from || "") + " — " + escapeHtml(s.date_to || "") + "</span>";
+          const body = document.createElement("div");
+          body.className = "source-body";
+          const meta = "thread_id: " + s.thread_id + " · root: " + s.root_message_id + " · сообщений: " +
+            (s.message_ids ? s.message_ids.length : 0) + "\nАвторы: " + (s.authors || []).join(", ") + "\n\n";
+          body.textContent = meta + (s.text || "");
+          det.appendChild(sum);
+          det.appendChild(body);
+          li.appendChild(det);
+          sourcesList.appendChild(li);
+        });
+      } else {
+        askStatus.textContent = "Источники не найдены или контекст пуст.";
+      }
+    } catch (e) {
+      answerPanel.className = "panel panel-error";
+      answerPanel.textContent = "Ошибка сети при запросе ответа.";
+      askStatus.textContent = "";
+    }
+    btnAsk.disabled = false;
+  });
+})();
+  </script>
+</body>
+</html>
